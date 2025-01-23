@@ -1,6 +1,9 @@
 import ImageKit from "imagekit";
 import Post from "../models/post.model.js";
 import User from "../models/user.model.js";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // Get all posts from collection
 export const getPosts = async (req, res) => {
