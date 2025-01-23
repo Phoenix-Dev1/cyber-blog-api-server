@@ -6,6 +6,9 @@ import commentRouter from "./routes/comment.route.js";
 import authRouter from "./routes/auth.route.js";
 import cors from "cors";
 import passport from "./passport.js";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const PORT = process.env.PORT || 5432;
 
