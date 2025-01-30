@@ -174,6 +174,48 @@ export const deletePost = async (req, res) => {
   }
 };
 
+// Edit a single post
+export const editPost = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const role = req.user.role || "user";
+
+    if (!userId) {
+      return res.status(401).json("Not authenticated");
+    }
+
+    if (role === "admin") {
+      const updatedPost = await Post.findOneAndUpdate(
+        { slug: req.params.slug },
+        { $set: req.body },
+        { new: true }
+      );
+      return res.status(200).json(updatedPost);
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json("User not found");
+    }
+
+    const updatedPost = await Post.findOneAndUpdate(
+      { slug: req.params.slug, user: user._id },
+      { $set: req.body },
+      { new: true }
+    );
+
+    if (!updatedPost) {
+      return res.status(403).json("Not your post to edit");
+    }
+
+    res.status(200).json(updatedPost);
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Failed to edit post", error: err.message });
+  }
+};
+
 // Feature a post
 export const featurePost = async (req, res) => {
   console.log(req.user);
