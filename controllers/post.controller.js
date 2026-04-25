@@ -72,7 +72,7 @@ export const getPosts = async (req, res) => {
       .limit(limit)
       .skip((page - 1) * limit);
 
-    const totalPosts = await Post.countDocuments();
+    const totalPosts = await Post.countDocuments(query);
     const hasMore = page * limit < totalPosts;
 
     res.status(200).json({ posts, hasMore });
@@ -137,9 +137,14 @@ export const deletePost = async (req, res) => {
   try {
     const userId = req.user.id;
     const role = req.user.role || "user";
+    const password = req.body.password;
 
     if (!userId) {
       return res.status(401).json("Not authenticated");
+    }
+
+    if (password !== process.env.DELETE_POST_PASSWORD) {
+      return res.status(403).json("Invalid deletion password. Deletion prevented in demo environment.");
     }
 
     if (role === "admin") {

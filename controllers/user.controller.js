@@ -60,3 +60,44 @@ export const savePost = async (req, res) => {
       .json({ message: "Failed to save post", error: err.message });
   }
 };
+
+// Get a single user by username
+export const getUser = async (req, res) => {
+  try {
+    const user = await User.findOne({ username: req.params.username }).select("-password");
+    if (!user) {
+      return res.status(404).json("User not found");
+    }
+    res.status(200).json(user);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch user", error: err.message });
+  }
+};
+
+// Update user settings
+export const updateSettings = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { username, bio, img } = req.body;
+
+    if (!userId) {
+      return res.status(401).json("Not Authenticated");
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $set: {
+          username,
+          bio,
+          img,
+        },
+      },
+      { new: true }
+    ).select("-password");
+
+    res.status(200).json(updatedUser);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to update settings", error: err.message });
+  }
+};
