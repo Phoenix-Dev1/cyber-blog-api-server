@@ -7,6 +7,7 @@ import authRouter from "./routes/auth.route.js";
 import cors from "cors";
 import passport from "./passport.js";
 import dotenv from "dotenv";
+import mongoose from "mongoose";
 
 dotenv.config();
 
@@ -31,8 +32,19 @@ const PORT = process.env.PORT || 5432;
 
 const app = express();
 
+// Behind a proxy (Render, Cloudflare Tunnel) the app itself is reached over plain http. Trusting the
+// first proxy's X-Forwarded-Proto makes req.protocol "https", so the relative GitHub callback URL in
+// passport.js is built as https://… (GitHub rejects an http callback).
+app.set("trust proxy", 1);
+
 // Middleware
 app.use(express.json());
+
+// Health check for Docker and the monitoring: 200 while connected to MongoDB, else 503.
+app.get("/healthz", (req, res) => {
+  const ok = mongoose.connection.readyState === 1;
+  res.status(ok ? 200 : 503).json({ ok });
+});
 
 // CORS configuration
 app.use(
