@@ -5,6 +5,15 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// The only post fields a client may set. The server owns the rest (user, slug, isFeatured, visit, timestamps):
+// spreading req.body let any logged-in user feature their own post, fake its visit count or move it to
+// another user. isFeatured changes only through featurePost (admins).
+const POST_FIELDS = ["title", "desc", "category", "content", "img"];
+const pickPostFields = (body = {}) =>
+  Object.fromEntries(
+    POST_FIELDS.filter((key) => body[key] !== undefined).map((key) => [key, body[key]])
+  );
+
 // Get all posts from collection
 export const getPosts = async (req, res) => {
   try {
@@ -122,7 +131,7 @@ export const createPost = async (req, res) => {
       counter++;
     }
 
-    const newPost = new Post({ user: user._id, slug, ...req.body });
+    const newPost = new Post({ ...pickPostFields(req.body), user: user._id, slug });
     const post = await newPost.save();
     res.status(200).json(post);
   } catch (err) {
@@ -192,7 +201,7 @@ export const editPost = async (req, res) => {
     if (role === "admin") {
       const updatedPost = await Post.findOneAndUpdate(
         { slug: req.params.slug },
-        { $set: req.body },
+        { $set: pickPostFields(req.body) },
         { new: true }
       );
       return res.status(200).json(updatedPost);
@@ -205,7 +214,7 @@ export const editPost = async (req, res) => {
 
     const updatedPost = await Post.findOneAndUpdate(
       { slug: req.params.slug, user: user._id },
-      { $set: req.body },
+      { $set: pickPostFields(req.body) },
       { new: true }
     );
 
