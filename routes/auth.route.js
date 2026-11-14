@@ -3,59 +3,35 @@ import passport from "passport";
 import {
   registerUser,
   loginUser,
-  getUserData,
-  githubCallback,
-  googleCallback,
+  getMe,
+  oauthDone,
+  oauthFailed,
 } from "../controllers/auth.controller.js";
+import { requireAuth } from "../middlewares/auth.js";
+import { loginLimit, registerLimit } from "../middlewares/rateLimits.js";
+import { validate } from "../middlewares/validate.js";
+import { loginBody, registerBody } from "../validation/schemas.js";
 
 const router = express.Router();
 
-// Local registration
-router.post("/register", registerUser);
+router.post("/register", registerLimit, validate({ body: registerBody }), registerUser);
+router.post("/login", loginLimit, validate({ body: loginBody }), loginUser);
+router.get("/me", requireAuth, getMe);
 
-// Local login
-router.post("/login", loginUser);
+// Google/GitHub: start → provider → callback. Any failure (cancelled, provider error, DB error) sends the
+// browser to the client's login page instead of showing a JSON error.
+const oauthCallback = (provider) => (req, res, next) =>
+  passport.authenticate(provider, { session: false }, (err, user) => {
+    if (err) console.error(`${provider} sign-in failed: ${err.message || err.code || err.name}`);
+    if (err || !user) return oauthFailed(req, res);
+    req.user = user;
+    oauthDone(req, res);
+  })(req, res, next);
 
-// User data
-router.get("/me", getUserData);
+router.get("/github", passport.authenticate("github", { session: false }));
+router.get("/github/callback", oauthCallback("github"));
 
-// OAuth Login/Register (GitHub)
-router.get(
-  "/github",
-  passport.authenticate("github", { scope: ["user:email"], session: false }) // Disable session
-);
-
-// GitHub Callback
-router.get(
-  "/github/callback",
-  passport.authenticate("github", {
-    failureRedirect: "/login",
-    session: false,
-  }), // Disable session
-  githubCallback
-);
-
-// Google OAuth
-router.get(
-  "/google",
-  passport.authenticate("google", {
-    scope: ["profile", "email"],
-    session: false,
-  })
-);
-
-// Google OAuth Callback
-router.get(
-  "/google/callback",
-  (req, res, next) => {
-    console.log("Google callback hit:", req.query);
-    next();
-  },
-  passport.authenticate("google", {
-    failureRedirect: "/login",
-    session: false,
-  }),
-  googleCallback
-);
+router.get("/google", passport.authenticate("google", { scope: ["profile", "email"], session: false }));
+router.get("/google/callback", oauthCallback("google"));
 
 export default router;

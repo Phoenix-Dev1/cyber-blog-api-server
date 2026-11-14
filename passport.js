@@ -1,108 +1,65 @@
+// Google/GitHub sign-in. Stateless: the callback route signs a JWT (routes/auth.route.js); no sessions.
 import passport from "passport";
 import { Strategy as GitHubStrategy } from "passport-github2";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
-import User from "./models/user.model.js";
+import { env } from "./config/env.js";
+import { findOrCreateOAuthUser } from "./lib/oauthUser.js";
 
-// Local Keys
-const USER_URL = process.env.BACKEND_URL;
+const isTrue = (value) => value === true || value === "true";
 
-// Github Keys
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
-const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
-
-// Google Keys
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-
-// Github
 passport.use(
   new GitHubStrategy(
     {
-      clientID: GITHUB_CLIENT_ID,
-      clientSecret: GITHUB_CLIENT_SECRET,
+      ...env.github,
+      // Relative: built from the request (https behind the tunnel thanks to "trust proxy")
       callbackURL: "/auth/github/callback",
+      // Here (not only on the route) so passport-github2 fetches the account's e-mails with their flags
+      scope: ["user:email"],
+      allRawEmails: true,
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        // Handle missing emails
-        const email =
-          profile.emails && profile.emails[0]?.value
-            ? profile.emails[0].value
-            : `${profile.username}@github-placeholder.com`;
-
-        // Find or create the user
-        let user = await User.findOne({
+        const emails = profile.emails ?? [];
+        const primary = emails.find((e) => e.primary) ?? emails[0];
+        const user = await findOrCreateOAuthUser({
+          provider: "github",
           providerId: profile.id,
-          authProvider: "github",
+          email: primary?.value,
+          emailVerified: isTrue(primary?.verified),
+          username: profile.username || profile.displayName,
+          img: profile.photos?.[0]?.value,
         });
-
-        if (!user) {
-          user = await User.create({
-            authProvider: "github",
-            providerId: profile.id,
-            username: profile.username,
-            email, // Use the resolved email
-            img: profile.photos[0]?.value || null,
-          });
-        }
-
         done(null, user);
       } catch (err) {
-        done(err, null);
+        done(err);
       }
     }
   )
 );
 
-// Google
 passport.use(
   new GoogleStrategy(
     {
-      clientID: GOOGLE_CLIENT_ID,
-      clientSecret: GOOGLE_CLIENT_SECRET,
-      callbackURL: `${USER_URL}auth/google/callback`,
+      ...env.google,
+      callbackURL: `${env.backendUrl}auth/google/callback`,
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        // Extract email
-        const email =
-          profile.emails && profile.emails[0]?.value
-            ? profile.emails[0].value
-            : `${profile.id}@google-placeholder.com`;
-
-        // Find or create user
-        let user = await User.findOne({
+        const email = profile.emails?.[0];
+        const user = await findOrCreateOAuthUser({
+          provider: "google",
           providerId: profile.id,
-          authProvider: "google",
+          email: email?.value,
+          emailVerified: isTrue(email?.verified),
+          username: profile.displayName,
+          img: profile.photos?.[0]?.value,
         });
-
-        if (!user) {
-          user = await User.create({
-            authProvider: "google",
-            providerId: profile.id,
-            username: profile.displayName || profile.id,
-            email,
-            img: profile.photos[0]?.value || null,
-          });
-        }
-
         done(null, user);
       } catch (err) {
-        done(err, null);
+        done(err);
       }
     }
   )
 );
-
-// Serialize user for session (not used in stateless JWT setup)
-passport.serializeUser((user, done) => {
-  done(null, user.id);
-});
-
-passport.deserializeUser((id, done) => {
-  User.findById(id, (err, user) => {
-    done(err, user);
-  });
-});
 
 export default passport;

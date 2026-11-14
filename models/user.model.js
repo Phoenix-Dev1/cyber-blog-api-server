@@ -46,6 +46,12 @@ const userSchema = new Schema(
       type: String,
       default: "",
     },
+    // The shared demo login on the login page (set once with scripts/mark-demo-user.js): its profile is
+    // locked and deleting its posts needs DELETE_POST_PASSWORD.
+    isDemo: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );

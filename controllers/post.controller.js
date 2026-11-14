@@ -1,9 +1,12 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import ImageKit from "imagekit";
 import Post from "../models/post.model.js";
 import User from "../models/user.model.js";
-import dotenv from "dotenv";
-
-dotenv.config();
+import Comment from "../models/comment.model.js";
+import { env } from "../config/env.js";
+import { httpError } from "../lib/httpError.js";
+import { escapeRegex } from "../lib/text.js";
+import { uniqueSlug } from "../lib/slug.js";
 
 // The only post fields a client may set. The server owns the rest (user, slug, isFeatured, visit, timestamps):
 // spreading req.body let any logged-in user feature their own post, fake its visit count or move it to
@@ -14,262 +17,142 @@ const pickPostFields = (body = {}) =>
     POST_FIELDS.filter((key) => body[key] !== undefined).map((key) => [key, body[key]])
   );
 
-// Get all posts from collection
+const SORTS = {
+  newest: { createdAt: -1 },
+  oldest: { createdAt: 1 },
+  // _id breaks ties, so pages don't repeat or skip posts with the same visit count
+  popular: { visit: -1, _id: -1 },
+  trending: { visit: -1, _id: -1 },
+};
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+// List posts (query checked by listPostsQuery: limit is at most 50). Lists leave out `content`.
 export const getPosts = async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 2;
+  const { page, limit, cat, author, search, sort, featured } = req.valid.query;
 
-    const query = {};
-    const cat = req.query.cat;
-    const author = req.query.author;
-    const searchQuery = req.query.search;
-    const sortQuery = req.query.sort;
-    const featured = req.query.featured;
+  const query = {};
+  if (cat) query.category = cat;
+  // Title search; the text is matched literally
+  if (search) query.title = { $regex: escapeRegex(search), $options: "i" };
+  if (featured && !["false", "0"].includes(featured)) query.isFeatured = true;
+  if (sort === "trending") query.createdAt = { $gte: new Date(Date.now() - WEEK_MS) };
 
-    // Filter by category
-    if (cat) {
-      query.category = cat;
+  if (author) {
+    const user = await User.findOne({ username: author }).select("_id");
+    if (!user) {
+      throw httpError(404, "No posts found");
     }
+    query.user = user._id;
+  }
 
-    // Search by title
-    if (searchQuery) {
-      query.title = { $regex: searchQuery, $options: "i" };
-    }
-
-    // Filter by author
-    if (author) {
-      const user = await User.findOne({ username: author }).select("_id");
-      if (!user) {
-        return res.status(404).json("No posts found");
-      }
-      query.user = user._id;
-    }
-
-    // Sorting logic
-    let sortObj = { createdAt: -1 };
-    if (sortQuery) {
-      switch (sortQuery) {
-        case "newest":
-          sortObj = { createdAt: -1 };
-          break;
-        case "oldest":
-          sortObj = { createdAt: 1 };
-          break;
-        case "popular":
-          sortObj = { visit: -1 };
-          break;
-        case "trending":
-          sortObj = { visit: -1 };
-          query.createdAt = {
-            $gte: new Date(new Date().getTime() - 7 * 24 * 60 * 60 * 1000),
-          };
-          break;
-        default:
-          break;
-      }
-    }
-
-    // Featured posts
-    if (featured) {
-      query.isFeatured = true;
-    }
-
-    const posts = await Post.find(query)
+  const [posts, totalPosts] = await Promise.all([
+    Post.find(query)
+      .select("-content")
       .populate("user", "username")
-      .sort(sortObj)
-      .limit(limit)
-      .skip((page - 1) * limit);
+      .sort(SORTS[sort] ?? SORTS.newest)
+      .skip((page - 1) * limit)
+      .limit(limit),
+    Post.countDocuments(query),
+  ]);
 
-    const totalPosts = await Post.countDocuments(query);
-    const hasMore = page * limit < totalPosts;
-
-    res.status(200).json({ posts, hasMore });
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Failed to fetch posts", error: err.message });
-  }
+  res.status(200).json({ posts, hasMore: page * limit < totalPosts });
 };
 
-// Get a single post
+// One post. A missing post answers 200 null for now, because that's what today's client shows as
+// "Post Not Found"; it becomes a 404 together with the client's 404 page (follow-up S-1b).
 export const getPost = async (req, res) => {
-  try {
-    const post = await Post.findOne({ slug: req.params.slug }).populate(
-      "user",
-      "username img"
-    );
-    res.status(200).json(post);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Failed to fetch post", error: err.message });
-  }
+  const post = await Post.findOne({ slug: req.params.slug }).populate("user", "username img");
+  res.status(200).json(post);
 };
 
-// Create a new post
+// Counts one visit. Meant to be called once per page view. GET /posts/:slug still counts too, until the
+// client calls this instead (follow-up S-1b).
+export const countView = async (req, res) => {
+  const { matchedCount } = await Post.updateOne({ slug: req.params.slug }, { $inc: { visit: 1 } });
+  if (!matchedCount) {
+    throw httpError(404, "Post not found");
+  }
+  res.status(204).end();
+};
+
+// Create a post (body checked by createPostBody)
 export const createPost = async (req, res) => {
-  try {
-    const userId = req.user.id;
-
-    if (!userId) {
-      return res.status(401).json("Not authenticated");
-    }
-
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json("User not found");
-    }
-
-    let slug = req.body.title.replace(/ /g, "-").toLowerCase();
-    let existingPost = await Post.findOne({ slug });
-    let counter = 2;
-
-    while (existingPost) {
-      slug = `${slug}-${counter}`;
-      existingPost = await Post.findOne({ slug });
-      counter++;
-    }
-
-    const newPost = new Post({ ...pickPostFields(req.body), user: user._id, slug });
-    const post = await newPost.save();
-    res.status(200).json(post);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Failed to create post", error: err.message });
-  }
+  const fields = pickPostFields(req.body);
+  const post = await Post.create({
+    ...fields,
+    user: req.user._id,
+    slug: await uniqueSlug(fields.title),
+  });
+  res.status(201).json(post);
 };
 
-// Delete a single post
+const sha256 = (value) => createHash("sha256").update(String(value)).digest();
+const isDeletePassword = (password) =>
+  Boolean(env.deletePostPassword) &&
+  typeof password === "string" &&
+  timingSafeEqual(sha256(password), sha256(env.deletePostPassword));
+
+// Delete a post: its author or an admin. Its comments and every user's bookmark of it go too.
 export const deletePost = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const role = req.user.role || "user";
-    const password = req.body.password;
-
-    if (!userId) {
-      return res.status(401).json("Not authenticated");
-    }
-
-    if (password !== process.env.DELETE_POST_PASSWORD) {
-      return res.status(403).json("Invalid deletion password. Deletion prevented in demo environment.");
-    }
-
-    if (role === "admin") {
-      await Post.findByIdAndDelete(req.params.id);
-      return res.status(200).json("Post has been deleted");
-    }
-
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json("User not found");
-    }
-
-    const deletedPost = await Post.findOneAndDelete({
-      _id: req.params.id,
-      user: user._id,
-    });
-
-    if (!deletedPost) {
-      return res.status(403).json("Not your post to delete");
-    }
-
-    await User.updateMany(
-      { savedPosts: req.params.id },
-      { $pull: { savedPosts: req.params.id } }
-    );
-
-    res.status(200).json("Post has been deleted");
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Failed to delete post", error: err.message });
+  // Decision Q2: only the shared demo account has to type the delete password
+  if (req.user.isDemo && !isDeletePassword(req.body.password)) {
+    throw httpError(403, "Invalid deletion password. Deletion prevented in demo environment.");
   }
+
+  const post = await Post.findById(req.params.id);
+  if (!post) {
+    throw httpError(404, "Post not found");
+  }
+  if (req.user.role !== "admin" && !post.user.equals(req.user._id)) {
+    throw httpError(403, "Not your post to delete");
+  }
+
+  await post.deleteOne();
+  await Promise.all([
+    Comment.deleteMany({ post: post._id }),
+    User.updateMany({ savedPosts: post.id }, { $pull: { savedPosts: post.id } }),
+  ]);
+
+  res.status(200).json("Post has been deleted");
 };
 
-// Edit a single post
+// Edit a post: its author or an admin (body checked by editPostBody). The slug never changes.
 export const editPost = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const role = req.user.role || "user";
+  const filter = { slug: req.params.slug };
+  if (req.user.role !== "admin") filter.user = req.user._id;
 
-    if (!userId) {
-      return res.status(401).json("Not authenticated");
-    }
+  const post = await Post.findOneAndUpdate(
+    filter,
+    { $set: pickPostFields(req.body) },
+    { new: true, runValidators: true }
+  );
 
-    if (role === "admin") {
-      const updatedPost = await Post.findOneAndUpdate(
-        { slug: req.params.slug },
-        { $set: pickPostFields(req.body) },
-        { new: true }
-      );
-      return res.status(200).json(updatedPost);
-    }
-
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json("User not found");
-    }
-
-    const updatedPost = await Post.findOneAndUpdate(
-      { slug: req.params.slug, user: user._id },
-      { $set: pickPostFields(req.body) },
-      { new: true }
-    );
-
-    if (!updatedPost) {
-      return res.status(403).json("Not your post to edit");
-    }
-
-    res.status(200).json(updatedPost);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Failed to edit post", error: err.message });
+  if (!post) {
+    const exists = await Post.exists({ slug: req.params.slug });
+    throw exists ? httpError(403, "Not your post to edit") : httpError(404, "Post not found");
   }
+
+  res.status(200).json(post);
 };
 
-// Feature a post
+// Feature or un-feature a post (admins only: requireAdmin on the route)
 export const featurePost = async (req, res) => {
-  console.log(req.user);
-
-  try {
-    const role = req.user.role || "user";
-
-    if (role !== "admin") {
-      return res.status(403).json("You cannot feature posts");
-    }
-
-    const post = await Post.findById(req.body.postId);
-
-    if (!post) {
-      return res.status(404).json("Post not found");
-    }
-
-    const updatedPost = await Post.findByIdAndUpdate(
-      req.body.postId,
-      { isFeatured: !post.isFeatured },
-      { new: true }
-    );
-
-    res.status(200).json(updatedPost);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Failed to feature post", error: err.message });
+  const post = await Post.findById(req.body.postId).select("isFeatured");
+  if (!post) {
+    throw httpError(404, "Post not found");
   }
+
+  const updatedPost = await Post.findByIdAndUpdate(
+    post._id,
+    { isFeatured: !post.isFeatured },
+    { new: true }
+  );
+  res.status(200).json(updatedPost);
 };
 
-// ImageKit configuration
-const imagekit = new ImageKit({
-  urlEndpoint: process.env.IK_URL_ENDPOINT,
-  publicKey: process.env.IK_PUBLIC_KEY,
-  privateKey: process.env.IK_PRIVATE_KEY,
-});
+const imagekit = new ImageKit(env.imagekit);
 
-// Upload an image
-export const uploadAuth = async (req, res) => {
-  const result = imagekit.getAuthenticationParameters();
-  res.send(result);
+// Signs an ImageKit upload from the browser (logged-in users only: requireAuth on the route)
+export const uploadAuth = (req, res) => {
+  res.send(imagekit.getAuthenticationParameters());
 };
