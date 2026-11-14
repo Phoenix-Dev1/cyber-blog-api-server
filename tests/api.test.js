@@ -87,13 +87,12 @@ describe("basics", () => {
     assert.match(res.headers["access-control-allow-headers"], /authorization/i);
   });
 
-  it("answers unknown routes with 404 in each route family's shape", async () => {
-    const plain = await call("get", "/nope");
-    assert.equal(plain.status, 404);
-    assert.equal(plain.body, "Not found");
-    const auth = await call("get", "/auth/nope");
-    assert.equal(auth.status, 404);
-    assert.deepEqual(auth.body, { message: "Not found" });
+  it("answers unknown routes with 404 { message }", async () => {
+    for (const url of ["/nope", "/auth/nope"]) {
+      const res = await call("get", url);
+      assert.equal(res.status, 404);
+      assert.deepEqual(res.body, { message: "Not found" });
+    }
   });
 
   it("rejects invalid JSON with 400 and no details", async () => {
@@ -106,7 +105,7 @@ describe("basics", () => {
     const { token } = await makeUser();
     const res = await call("post", "/posts", { token, body: newPostBody({ content: "a".repeat(400_000) }) });
     assert.equal(res.status, 413);
-    assert.equal(res.body, "Request too large");
+    assert.deepEqual(res.body, { message: "Request too large" });
   });
 });
 
@@ -203,7 +202,7 @@ describe("register, login and /auth/me", () => {
     }
     const plain = await call("get", "/users/saved");
     assert.equal(plain.status, 401);
-    assert.equal(plain.body, "Please log in first");
+    assert.deepEqual(plain.body, { message: "Please log in first" });
   });
 
   it("limits failed logins per visitor (10 per 15 minutes)", async () => {
@@ -316,7 +315,7 @@ describe("public profiles and settings", () => {
   it("answers 404 for an unknown profile", async () => {
     const res = await call("get", "/users/nobody-here");
     assert.equal(res.status, 404);
-    assert.equal(res.body, "User not found");
+    assert.deepEqual(res.body, { message: "User not found" });
   });
 
   it("updates bio, avatar and username", async () => {
@@ -346,7 +345,7 @@ describe("public profiles and settings", () => {
     for (const [body, status, message] of cases) {
       const res = await call("patch", "/users/settings", { token, body });
       assert.equal(res.status, status, JSON.stringify(body));
-      assert.equal(res.body, message);
+      assert.deepEqual(res.body, { message });
     }
   });
 
@@ -361,7 +360,7 @@ describe("public profiles and settings", () => {
     const { user, token } = await makeUser({ isDemo: true, username: "Demo Visitor" });
     const res = await call("patch", "/users/settings", { token, body: { username: "Hijacked", bio: "x" } });
     assert.equal(res.status, 403);
-    assert.equal(res.body, "The demo account's profile can't be changed.");
+    assert.deepEqual(res.body, { message: "The demo account's profile can't be changed." });
     assert.equal((await User.findById(user._id)).username, "Demo Visitor");
   });
 });
@@ -410,7 +409,7 @@ describe("posts", () => {
     for (const [change, message] of cases) {
       const res = await call("post", "/posts", { token, body: newPostBody(change) });
       assert.equal(res.status, 400, JSON.stringify(change).slice(0, 80));
-      assert.equal(res.body, message);
+      assert.deepEqual(res.body, { message });
     }
     const anonymous = await call("post", "/posts", { body: newPostBody() });
     assert.equal(anonymous.status, 401);
@@ -466,19 +465,21 @@ describe("posts", () => {
     assert.deepEqual(Object.keys(res.body.user).sort(), ["_id", "img", "username"]);
   });
 
-  it("still answers 200 null for a missing post (today's client shows 'Post Not Found')", async () => {
+  it("answers 404 for a missing post", async () => {
     const res = await call("get", "/posts/does-not-exist");
-    assert.equal(res.status, 200);
-    assert.equal(res.body, null);
+    assert.equal(res.status, 404);
+    assert.deepEqual(res.body, { message: "Post not found" });
   });
 
-  it("counts views through GET (for now) and POST /posts/:slug/view", async () => {
+  it("counts views only through POST /posts/:slug/view (not on GET)", async () => {
     const { user } = await makeUser();
     const post = await makePost(user);
     await call("get", `/posts/${post.slug}`);
+    await call("get", `/posts/${post.slug}`);
+    assert.equal((await Post.findById(post._id)).visit, 0);
     const view = await call("post", `/posts/${post.slug}/view`);
     assert.equal(view.status, 204);
-    assert.equal((await Post.findById(post._id)).visit, 2);
+    assert.equal((await Post.findById(post._id)).visit, 1);
     const missing = await call("post", "/posts/does-not-exist/view");
     assert.equal(missing.status, 404);
   });
@@ -525,7 +526,7 @@ describe("posts", () => {
 
     const res = await call("delete", `/posts/${post.id}`, { token });
     assert.equal(res.status, 200);
-    assert.equal(res.body, "Post has been deleted");
+    assert.deepEqual(res.body, { message: "Post has been deleted" });
     assert.equal(await Post.exists({ _id: post._id }), null);
     assert.equal(await Comment.countDocuments({ post: post._id }), 0);
     assert.deepEqual((await User.findById(reader.user._id)).savedPosts, []);
@@ -537,10 +538,10 @@ describe("posts", () => {
     const post = await makePost(user);
     const forbidden = await call("delete", `/posts/${post.id}`, { token: otherToken });
     assert.equal(forbidden.status, 403);
-    assert.equal(forbidden.body, "Not your post to delete");
+    assert.deepEqual(forbidden.body, { message: "Not your post to delete" });
     const bad = await call("delete", "/posts/not-an-id", { token: otherToken });
     assert.equal(bad.status, 400);
-    assert.equal(bad.body, "Invalid id");
+    assert.deepEqual(bad.body, { message: "Invalid id" });
     const missing = await call("delete", "/posts/0123456789abcdef01234567", { token: otherToken });
     assert.equal(missing.status, 404);
   });
@@ -551,7 +552,7 @@ describe("posts", () => {
     for (const body of [undefined, {}, { password: "wrong" }, { password: { $ne: null } }]) {
       const res = await call("delete", `/posts/${post.id}`, { token, body });
       assert.equal(res.status, 403, JSON.stringify(body));
-      assert.equal(res.body, "Invalid deletion password. Deletion prevented in demo environment.");
+      assert.deepEqual(res.body, { message: "Invalid deletion password. Deletion prevented in demo environment." });
     }
     const ok = await call("delete", `/posts/${post.id}`, { token, body: { password: TEST_ENV.DELETE_POST_PASSWORD } });
     assert.equal(ok.status, 200);
@@ -571,7 +572,7 @@ describe("posts", () => {
     for (const t of [token, forged]) {
       const res = await call("patch", "/posts/feature", { token: t, body: { postId: post.id } });
       assert.equal(res.status, 403);
-      assert.equal(res.body, "Only admins can do that");
+      assert.deepEqual(res.body, { message: "Only admins can do that" });
     }
 
     const { token: adminToken } = await makeUser({ role: "admin" });
@@ -630,7 +631,7 @@ describe("comments", () => {
     for (const [url, body, status, message] of cases) {
       const res = await call("post", url, { token, body });
       assert.equal(res.status, status, `${url} ${JSON.stringify(body).slice(0, 40)}`);
-      assert.equal(res.body, message);
+      assert.deepEqual(res.body, { message });
     }
     assert.equal((await call("post", `/comments/${post.id}`, { body: { desc: "hi" } })).status, 401);
     assert.equal((await call("get", "/comments/not-an-id")).status, 400);
@@ -646,7 +647,7 @@ describe("comments", () => {
 
     const forbidden = await call("delete", `/comments/${mine.id}`, { token: otherToken });
     assert.equal(forbidden.status, 403);
-    assert.equal(forbidden.body, "You can delete only your comment!");
+    assert.deepEqual(forbidden.body, { message: "You can delete only your comment!" });
     assert.equal((await call("delete", `/comments/${mine.id}`, { token })).status, 200);
     assert.equal((await call("delete", `/comments/${another.id}`, { token: adminToken })).status, 200);
     assert.equal((await call("delete", `/comments/${mine.id}`, { token })).status, 404);
@@ -662,7 +663,7 @@ describe("comments", () => {
     }
     const blocked = await call("post", `/comments/${post.id}`, { token, ip, body: { desc: "one more" } });
     assert.equal(blocked.status, 429);
-    assert.equal(blocked.body, "Too many requests. Please try again later.");
+    assert.deepEqual(blocked.body, { message: "Too many requests. Please try again later." });
   });
 });
 
@@ -674,12 +675,12 @@ describe("saved posts", () => {
     const started = Date.now();
     const save = await call("patch", "/users/save", { token, body: { postId: post.id } });
     assert.equal(save.status, 200);
-    assert.equal(save.body, "Post saved");
+    assert.deepEqual(save.body, { message: "Post saved" });
     assert.ok(Date.now() - started < 1500, "no artificial delay");
     assert.deepEqual((await call("get", "/users/saved", { token })).body, [post.id]);
 
     const unsave = await call("patch", "/users/save", { token, body: { postId: post.id } });
-    assert.equal(unsave.body, "Post unsaved");
+    assert.deepEqual(unsave.body, { message: "Post unsaved" });
     assert.deepEqual((await call("get", "/users/saved", { token })).body, []);
   });
 
