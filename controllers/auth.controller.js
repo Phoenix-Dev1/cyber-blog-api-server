@@ -46,10 +46,10 @@ export const getMe = (req, res) => {
 };
 
 // After Google/GitHub: send the browser back to the client with a token, or to its login page on failure.
-// The token stays in the query string for now; it moves to the URL fragment (#token=) once the client
-// reads it there (follow-up S-1b).
+// The token travels in the URL fragment (#token=), which browsers never send to a server, so it can't
+// end up in Vercel's or anyone's access logs. The client reads it before rendering and cleans the URL.
 export const oauthDone = (req, res) => {
-  res.redirect(`${env.clientUrl}?token=${signToken(req.user)}`);
+  res.redirect(`${env.clientUrl}/#token=${signToken(req.user)}`);
 };
 
 export const oauthFailed = (req, res) => {

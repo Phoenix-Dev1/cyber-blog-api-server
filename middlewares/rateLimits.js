@@ -12,7 +12,7 @@ const limiter = (windowMinutes, limit, options = {}) =>
     standardHeaders: "draft-8",
     legacyHeaders: false,
     keyGenerator: clientKey,
-    handler: (req, res) => sendError(req, res, 429, "Too many requests. Please try again later."),
+    handler: (req, res) => sendError(res, 429, "Too many requests. Please try again later."),
     ...options,
   });
 

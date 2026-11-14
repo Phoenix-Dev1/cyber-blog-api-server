@@ -103,22 +103,34 @@ describe("errorHandler", () => {
   it("hides unexpected errors from the client and logs them without the query string", () => {
     const { res, logged } = run(new Error("secret internal detail"));
     assert.equal(res.statusCode, 500);
-    assert.equal(res.body, "Something went wrong. Please try again.");
+    assert.deepEqual(res.body, { message: "Something went wrong. Please try again." });
     assert.equal(logged.length, 1);
     assert.ok(logged[0].includes("GET /posts/x failed"));
     assert.ok(!logged[0].includes("one-time-code"));
   });
 
-  it("passes HttpErrors through, as { message } on /auth routes", () => {
+  it("passes HttpErrors through as { message }", () => {
     assert.deepEqual(run(httpError(409, "Taken"), "/auth/register").res.body, { message: "Taken" });
-    assert.equal(run(httpError(404, "Post not found"), "/posts/x").res.body, "Post not found");
+    assert.deepEqual(run(httpError(404, "Post not found"), "/posts/x").res.body, { message: "Post not found" });
   });
 
   it("maps duplicate keys to 409 without the duplicate value", () => {
     const err = Object.assign(new Error("E11000 duplicate key { email: 'a@b.c' }"), { code: 11000 });
     const { res, logged } = run(err, "/users/settings");
     assert.equal(res.statusCode, 409);
-    assert.equal(res.body, "Already exists");
+    assert.deepEqual(res.body, { message: "Already exists" });
     assert.equal(logged.length, 0);
+  });
+});
+
+describe("oauthDone", () => {
+  it("sends the token to the client in the URL fragment (never in the query string)", async () => {
+    const { oauthDone } = await import("../controllers/auth.controller.js");
+    let location;
+    oauthDone({ user: { _id: "0123456789abcdef01234567", role: "user" } }, { redirect: (url) => (location = url) });
+    const url = new URL(location);
+    assert.equal(url.origin + url.pathname, "http://client.test/");
+    assert.equal(url.search, "");
+    assert.match(url.hash, /^#token=[\w-]+\.[\w-]+\.[\w-]+$/);
   });
 });

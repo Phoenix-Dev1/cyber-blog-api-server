@@ -1,13 +1,10 @@
 import mongoose from "mongoose";
 import { HttpError } from "../lib/httpError.js";
 
-// Response shape for errors. Today's client reads `{ message }` on the /auth routes and shows the bare body
-// everywhere else (an object there would break its toasts), so the other routes keep sending a JSON string
-// until the client reads `{ message }` everywhere (client PR C-1).
-export const sendError = (req, res, status, message) =>
-  res.status(status).json(req.originalUrl.startsWith("/auth/") ? { message } : message);
+// Every error goes out as { message } (the client's errorMessage() reads it)
+export const sendError = (res, status, message) => res.status(status).json({ message });
 
-export const notFound = (req, res) => sendError(req, res, 404, "Not found");
+export const notFound = (req, res) => sendError(res, 404, "Not found");
 
 // The details of unexpected errors go to the log only; the client gets a generic message.
 // eslint-disable-next-line no-unused-vars
@@ -40,5 +37,5 @@ export const errorHandler = (err, req, res, next) => {
     console.error(`${req.method} ${req.originalUrl.split("?")[0]} failed:`, err);
   }
   if (res.headersSent) return;
-  sendError(req, res, status, message);
+  sendError(res, status, message);
 };

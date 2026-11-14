@@ -58,15 +58,16 @@ export const getPosts = async (req, res) => {
   res.status(200).json({ posts, hasMore: page * limit < totalPosts });
 };
 
-// One post. A missing post answers 200 null for now, because that's what today's client shows as
-// "Post Not Found"; it becomes a 404 together with the client's 404 page (follow-up S-1b).
+// One post (reading it doesn't count a visit: the client calls countView once per page view)
 export const getPost = async (req, res) => {
   const post = await Post.findOne({ slug: req.params.slug }).populate("user", "username img");
+  if (!post) {
+    throw httpError(404, "Post not found");
+  }
   res.status(200).json(post);
 };
 
-// Counts one visit. Meant to be called once per page view. GET /posts/:slug still counts too, until the
-// client calls this instead (follow-up S-1b).
+// Counts one visit: the client calls it once per opened post
 export const countView = async (req, res) => {
   const { matchedCount } = await Post.updateOne({ slug: req.params.slug }, { $inc: { visit: 1 } });
   if (!matchedCount) {
@@ -113,7 +114,7 @@ export const deletePost = async (req, res) => {
     User.updateMany({ savedPosts: post.id }, { $pull: { savedPosts: post.id } }),
   ]);
 
-  res.status(200).json("Post has been deleted");
+  res.status(200).json({ message: "Post has been deleted" });
 };
 
 // Edit a post: its author or an admin (body checked by editPostBody). The slug never changes.

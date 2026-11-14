@@ -9,7 +9,6 @@ import {
   featurePost,
   editPost,
 } from "../controllers/post.controller.js";
-import increaseVisits from "../middlewares/increaseVisits.js";
 import { requireAdmin, requireAuth } from "../middlewares/auth.js";
 import { postWriteLimit, uploadLimit } from "../middlewares/rateLimits.js";
 import { validate } from "../middlewares/validate.js";
@@ -28,7 +27,7 @@ const router = express.Router();
 // Signs ImageKit uploads: only for logged-in users (every upload button is on a login-only page)
 router.get("/upload-auth", requireAuth, uploadLimit, uploadAuth);
 router.get("/", validate({ query: listPostsQuery }), getPosts);
-router.get("/:slug", validate({ params: slugParams }), increaseVisits, getPost);
+router.get("/:slug", validate({ params: slugParams }), getPost);
 router.post("/:slug/view", validate({ params: slugParams }), countView);
 router.post("/", requireAuth, postWriteLimit, validate({ body: createPostBody }), createPost);
 router.delete("/:id", requireAuth, validate({ params: idParams, body: deletePostBody }), deletePost);

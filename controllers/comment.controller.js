@@ -35,5 +35,5 @@ export const deleteComment = async (req, res) => {
   }
 
   await comment.deleteOne();
-  res.status(200).json("Comment deleted");
+  res.status(200).json({ message: "Comment deleted" });
 };
