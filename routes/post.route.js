@@ -13,7 +13,8 @@ import { authenticateJWT } from "../middlewares/jwtAuth.js";
 
 const router = express.Router();
 
-router.get("/upload-auth", uploadAuth);
+// Signs ImageKit uploads: only for logged-in users (every upload button is on a login-only page)
+router.get("/upload-auth", authenticateJWT, uploadAuth);
 router.get("/", getPosts);
 router.get("/:slug", increaceVisits, getPost);
 router.post("/", authenticateJWT, createPost);
