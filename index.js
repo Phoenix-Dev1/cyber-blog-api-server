@@ -1,100 +1,37 @@
-import express from "express";
-import connectDB from "./lib/connectDB.js";
-import userRouter from "./routes/user.route.js";
-import postRouter from "./routes/post.route.js";
-import commentRouter from "./routes/comment.route.js";
-import authRouter from "./routes/auth.route.js";
-import cors from "cors";
-import passport from "./passport.js";
-import dotenv from "dotenv";
+// Starts the API: connect to MongoDB, listen, and shut down cleanly on SIGTERM (docker stop).
+import { env } from "./config/env.js";
 import mongoose from "mongoose";
-
-dotenv.config();
-
-// Loudly catch uncaught exceptions and unhandled rejections
-process.on("uncaughtException", (err) => {
-  console.error("========== UNCAUGHT EXCEPTION ==========");
-  console.error(err.name, err.message);
-  console.error(err.stack);
-  console.error("========================================");
-  process.exit(1);
-});
+import app from "./app.js";
 
 process.on("unhandledRejection", (err) => {
-  console.error("========== UNHANDLED REJECTION ==========");
-  console.error(err.name, err.message);
-  console.error(err.stack);
-  console.error("=========================================");
+  console.error("Unhandled rejection:", err);
+  process.exit(1);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
   process.exit(1);
 });
 
-const PORT = process.env.PORT || 5432;
-
-const app = express();
-
-// Behind a proxy (Render, Cloudflare Tunnel) the app itself is reached over plain http. Trusting the
-// first proxy's X-Forwarded-Proto makes req.protocol "https", so the relative GitHub callback URL in
-// passport.js is built as https://… (GitHub rejects an http callback).
-app.set("trust proxy", 1);
-
-// Middleware
-app.use(express.json());
-
-// Health check for Docker and the monitoring: 200 while connected to MongoDB, else 503.
-app.get("/healthz", (req, res) => {
-  const ok = mongoose.connection.readyState === 1;
-  res.status(ok ? 200 : 503).json({ ok });
+const server = app.listen(env.port, () => {
+  console.log(`Server started on Port: ${env.port}`);
 });
 
-// CORS configuration
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL,
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
-    credentials: true,
-  })
-);
+try {
+  await mongoose.connect(env.mongo);
+  console.log("MongoDB is connected");
+} catch (err) {
+  // Exit so Docker restarts the container (and /healthz monitoring alerts) instead of serving 503s forever
+  console.error(`MongoDB connection failed: ${err.message}`);
+  process.exit(1);
+}
 
-// Initialize Passport
-app.use(passport.initialize());
-
-// Allow cross-origin requests
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", process.env.CLIENT_URL || "*");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
-  );
-  next();
-});
-
-// Routers
-app.use("/auth", authRouter); // Authentication routes
-app.use("/users", userRouter);
-app.use("/posts", postRouter);
-app.use("/comments", commentRouter);
-
-// Global Error handling middleware (at the end of the stack)
-app.use((err, req, res, next) => {
-  // Loud console logging
-  console.error("========== SERVER ERROR ==========");
-  console.error(`Method: ${req.method} | Path: ${req.originalUrl}`);
-  console.error(`Message: ${err.message || "Internal Server Error"}`);
-  console.error("Stack Trace:");
-  console.error(err.stack);
-  console.error("==================================");
-
-  const status = err.status || 500;
-  res.status(status).json({
-    message: err.message || "Something went wrong!",
-    status: status,
-    // Include stack only in development
-    stack: process.env.NODE_ENV === "production" ? undefined : err.stack,
+// Node runs as PID 1 in the container: without this, `docker stop` waits 10 s and then kills it.
+const shutdown = (signal) => {
+  console.log(`${signal} received, shutting down`);
+  setTimeout(() => process.exit(0), 8000).unref();
+  server.close(() => {
+    mongoose.disconnect().finally(() => process.exit(0));
   });
-});
-
-// Start the server
-app.listen(PORT, () => {
-  connectDB();
-  console.log(`Server started on Port: ${PORT}`);
-});
+};
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
