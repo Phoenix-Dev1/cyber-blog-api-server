@@ -12,13 +12,16 @@ const clip = (value, max) => (value ? String(value).replace(/\s+/g, " ").slice(0
 
 export function requestLog({ write = (line) => console.log(line) } = {}) {
   return (req, res, next) => {
-    if (SKIP.has(req.path)) return next();
+    // Read the path now: inside a mounted router (app.use("/posts", ...)) Express shortens req.path to the part
+    // after the mount point, and the response is usually sent from there, so at "finish" it would read "/".
+    const path = req.path;
+    if (SKIP.has(path)) return next();
     const start = process.hrtime.bigint();
     res.on("finish", () => {
       const ms = Math.round(Number(process.hrtime.bigint() - start) / 1e6);
       const ip = req.headers["cf-connecting-ip"] || req.ip || "-";
       write(
-        `${new Date().toISOString()} ${req.method} ${clip(req.path, 200)} ${res.statusCode} ${ms}ms ` +
+        `${new Date().toISOString()} ${req.method} ${clip(path, 200)} ${res.statusCode} ${ms}ms ` +
           `ip=${clip(ip, 45)} origin=${clip(req.headers.origin, 80)} ua="${clip(req.headers["user-agent"], 100).replace(/"/g, "'")}"`
       );
     });

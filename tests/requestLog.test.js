@@ -13,6 +13,10 @@ const appWithLog = () => {
   app.get("/healthz", (req, res) => res.json({ ok: true }));
   app.get("/auth/google/callback", (req, res) => res.redirect("/"));
   app.post("/auth/login", (req, res) => res.status(401).json({ message: "Wrong credentials" }));
+  const posts = express.Router();                     // mounted like the real routers in app.js
+  posts.get("/", (req, res) => res.json([]));
+  posts.get("/:slug", (req, res) => res.json({ slug: req.params.slug }));
+  app.use("/posts", posts);
   return { app, lines };
 };
 
@@ -48,6 +52,16 @@ describe("requestLog", () => {
     for (const secret of ["one-time-oauth-code", "state=", "?", "secret.jwt.token", "Bearer"]) {
       assert.ok(!lines[0].includes(secret), `the log line must not contain ${secret}`);
     }
+  });
+
+  it("logs the full path of requests handled by a mounted router", async () => {
+    const { app, lines } = appWithLog();
+    await request(app).get("/posts?page=1");
+    await request(app).get("/posts/my-first-post");
+    await settle();
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], / GET \/posts 200 /);
+    assert.match(lines[1], / GET \/posts\/my-first-post 200 /);
   });
 
   it("logs unknown paths (scanners) and skips /healthz", async () => {
