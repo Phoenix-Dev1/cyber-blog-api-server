@@ -11,6 +11,7 @@ import postRouter from "./routes/post.route.js";
 import commentRouter from "./routes/comment.route.js";
 import { generalLimit } from "./middlewares/rateLimits.js";
 import { errorHandler, notFound } from "./middlewares/errorHandler.js";
+import { requestLog } from "./middlewares/requestLog.js";
 
 const app = express();
 
@@ -19,6 +20,10 @@ const app = express();
 // passport.js is built as https://… (GitHub rejects an http callback). It also makes req.ip the visitor's.
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
+
+// One line per request (method, path without the query string, status, time, visitor IP, origin, user agent),
+// first so that rate-limited, CORS-refused and unknown-path requests are logged too. Off in the tests.
+if (process.env.NODE_ENV !== "test") app.use(requestLog());
 
 // Security headers. Cross-origin resource policy is relaxed: the API is called from the client's origin.
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
